@@ -1,5 +1,25 @@
-# This script is for configuring a single node cluster for Azure Stack HCI.
-# This script is for virtual machines for use in a development environment.
+<#
+Script Name:
+Author:
+Contact:
+Version:
+
+This script is for configuring a single node cluster for Azure Stack HCI.
+This script is for virtual machines for use in a development environment. Currently on working on a script for physical servers.  Then plans to combine the two scripts into one.
+#>
+
+<#
+This assumes that the following has been completed:
+1. The VMs has been created and is running AzSHCI 22H2.
+2. The VMs virtual network cards are configured.
+3. The Windows Admin Center has been deployed and is accessible.
+4. An Active Directory Domain has been deployed (Windows 2022)
+5. The VMs have been joined to the domain.
+6. A Windows Server 2022 server deployed for Management (optional)
+#>
+
+
+
 
 ### Variables
 $ClusterName = "AzSHCI-Cluster"
@@ -37,6 +57,28 @@ Invoke-Command ($Servers) {
     Install-WindowsFeature -Name $Using:Featurelist -IncludeAllSubFeature -IncludeManagementTools
 }
 
+
+# Restart and wait for computers
+Restart-Computer $servers -Protocol WSMan -Wait -For PowerShell -Force
+Start-Sleep 20 # Allow time for reboots to complete fully
+Foreach ($Server in $Servers) {
+    do { $Test = Test-NetConnection -ComputerName $Server -CommonTCPPort WINRM }while ($test.TcpTestSucceeded -eq $False)
+}
+
+
+## Rename Network Adapters
+# I plan to make this part better...
+Invoke-Command ($Servers) {
+    Rename-NetAdapter -Name "Ethernet" -NewName "vmNic01"
+    Rename-NetAdapter -Name "Ethernet 2" -NewName "vmNic02"
+    Rename-NetAdapter -Name "Ethernet 3" -NewName "vmNic03"
+    Rename-NetAdapter -Name "Ethernet 4" -NewName "vmNic04"
+    }
+    Invoke-Command -ComputerName $Servers -ScriptBlock {
+    Get-NetAdapter
+    }
+
+
 ### - Prep Cluster for Setup - ###
 
 ## Prepare Drives ##
@@ -68,10 +110,13 @@ New-Cluster -Name $ClusterName –Node $Servers –nostorage -ManagementPointNet
 ## - Configure Cluster Networking - ##
 
 # - Verify Adapters
-Get-NetAdapter -Name pNIC01, pNIC02 -CimSession (Get-ClusterNode).Name | Select Name, PSComputerName
+Invoke-Command -ComputerName $ClusterName -ScriptBlock {
+    Get-NetAdapter -Name vmnic01, vmnic02 -CimSession (Get-ClusterNode).Name | Select Name, PSComputerName
+    }
 
 # Configure Intent
 #  Disable Network Direct Adapter Property - For Virtual Machines Only
+# Note: This is not required for physical servers and since this is a single-node cluster, we will not use the vmnics for SMB traffic at this time.
 Invoke-Command -ComputerName $servers -ScriptBlock {
     if ((Get-ComputerInfo).CsSystemFamily -eq "Virtual Machine") {
         $AdapterOverride = New-NetIntentAdapterPropertyOverrides
@@ -81,10 +126,13 @@ Invoke-Command -ComputerName $servers -ScriptBlock {
 }
 
 # - Validate Intent Deployment - #
-Get-NetIntent -ClusterName $ClusterName
+Invoke-Command -ComputerName $servers -ScriptBlock {
+    Get-NetIntent
+    }
 
+Invoke-Command -ComputerName $servers -ScriptBlock {
 Get-NetIntentStatus -ClusterName $ClusterName -Name Cluster_ComputeStorage
-
+}
 
 ## - Enable Storage Spaces Direct - ##
 Enable-ClusterStorageSpacesDirect -CacheState Disabled -CimSession $ClusterName -PoolFriendlyName "S2D on $ClusterName"

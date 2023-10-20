@@ -37,6 +37,27 @@ Invoke-Command ($Servers) {
     Install-WindowsFeature -Name $Using:Featurelist -IncludeAllSubFeature -IncludeManagementTools
 }
 
+
+# Restart and wait for computers
+Restart-Computer $servers -Protocol WSMan -Wait -For PowerShell -Force
+Start-Sleep 20 # Allow time for reboots to complete fully
+Foreach ($Server in $Servers) {
+    do { $Test = Test-NetConnection -ComputerName $Server -CommonTCPPort WINRM }while ($test.TcpTestSucceeded -eq $False)
+}
+
+## Rename Network Adapters
+# I plan to make this part better...
+Invoke-Command ($Servers) {
+    Rename-NetAdapter -Name "Ethernet" -NewName "vmNic01"
+    Rename-NetAdapter -Name "Ethernet 2" -NewName "vmNic02"
+    Rename-NetAdapter -Name "Ethernet 3" -NewName "vmNic03"
+    Rename-NetAdapter -Name "Ethernet 4" -NewName "vmNic04"
+    }
+    Invoke-Command -ComputerName $Servers -ScriptBlock {
+    Get-NetAdapter
+    }
+
+
 ## - Prep Cluster for Setup - ##
 # - Prepare Drives - #
 
@@ -59,40 +80,41 @@ Invoke-Command ($Servers) {
 # - Test Cluster Configuration - #
 Test-Cluster -Node $ServerList -Include "Storage Spaces Direct", "Inventory", "Network", "System Configuration"
 
-## - Create Cluster - ##
-$ClusterName="cluster1"
-New-Cluster -Name $ClusterName –Node $Servers –nostorage -ManagementPointNetworkType "Distributed"
+## - Add Node To Cluster - ##
+## - Cluster - ##
+Add-ClusterNode -Cluster $ClusterName -Name $Servers
 
 
 ## - Configure Cluster Networking - ##
 
+## - Configure Cluster Networking - ##
+
 # - Verify Adapters
-Get-NetAdapter -Name pNIC01, pNIC02 -CimSession (Get-ClusterNode).Name | Select Name, PSComputerName
-
-
+Invoke-Command -ComputerName $ClusterName -ScriptBlock {
+    Get-NetAdapter -Name vmnic01, vmnic02, vmnic03, vmNic04 -CimSession (Get-ClusterNode).Name | Select Name, PSComputerName
+    }
 # - Rename Adapters if needed.
 Rename-NetAdapter -Name oldName -NewName newName
 
-# Configure Intent
+# Configure Intent for Storage Spaces Direct
 #  Disable Network Direct Adapter Property - For Virtual Machines Only
+# Note: This is not required for physical servers and since this is a single-node cluster, we will not use the vmnics for SMB traffic at this time.
 Invoke-Command -ComputerName $servers -ScriptBlock {
     if ((Get-ComputerInfo).CsSystemFamily -eq "Virtual Machine") {
         $AdapterOverride = New-NetIntentAdapterPropertyOverrides
         $AdapterOverride.NetworkDirect = 0
-        Add-NetIntent -Name ConvergedIntent -AdapterName vmNIC01, vmNIC02 -Management -Compute -AdapterPropertyOverrides $AdapterOverride
+        Add-NetIntent -Name StorageIntent -AdapterName vmNIC03, vmNIC04 -Storage -AdapterPropertyOverrides $AdapterOverride
     }
 }
 
 # - Validate Intent Deployment - #
-Get-NetIntent -ClusterName $ClusterName
+Invoke-Command -ComputerName $servers -ScriptBlock {
+    Get-NetIntent
+    }
 
+Invoke-Command -ComputerName $servers -ScriptBlock {
 Get-NetIntentStatus -ClusterName $ClusterName -Name Cluster_ComputeStorage
-
-
-## - Enable Storage Spaces Direct - ##
-Enable-ClusterStorageSpacesDirect -CacheState Disabled -CimSession $ClusterName -PoolFriendlyName "S2D on $ClusterName"
-
-Get-StoragePool -CimSession $session
+}
 
 ## - Create Cloud Witness - ##
 # Not needed for single node deployments
@@ -141,73 +163,66 @@ $StorageAccountAccessKey = (Get-AzStorageAccountKey -Name $StorageAccountName `
 Set-ClusterQuorum -Cluster $ClusterName -CloudWitness -AccountName $StorageAccountName `
     -AccessKey $StorageAccountAccessKey -Endpoint "core.windows.net"
 
-## - Create Cluster Shared Volumes - ##
-$VolumeName = Volume01
-New-Volume -CimSession $ClusterName -FileSystem CSVFS_ReFS `
-    -StoragePoolFriendlyName S2D* -Size 1TB -FriendlyName $VolumeName `
-    -ResiliencySettingName Mirror -ProvisioningType Thin
-
-## - Register Windows Admin Center - ##
 
 
-## - Register Azure Stack HCI with Azure - ##
-# Install NuGet and download the Azure Module
-Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
-if (!(Get-InstalledModule -Name Az.StackHCI -ErrorAction Ignore)) {
-    Install-Module -Name Az.StackHCI -Force
-}
-
-# - Login to Azure and Download Az Module - #
-# Download Azure Accounts module
-if (!(Get-InstalledModule -Name az.accounts -ErrorAction Ignore)) {
-    Install-Module -Name Az.Accounts -Force
-}
-# Login to Azure
-Login-AzAccount -UseDeviceAuthentication
+## - Post Configurations After Scale Out - ##
+## - For scaling out clusters only - ##
 
 
-# Select context if more available
-$context = Get-AzContext -ListAvailable
+### - Inline Fault Domain Changes - ###
+# Change Fault Domain
+Get-StoragePool -FriendlyName S2D* | Set-StoragePool -FaultDomainAwarenessDefault StorageScaleUnit
 
-# Check if multiple subscriptions are available and choose preferred subscription
-if (($context).count -gt 1) {
-    $context = $context | Out-GridView -OutputMode Single
-    $context | Set-AzContext
-}
-# Load subscription ID into variable
-$subscriptionID = $context.subscription.id
+#Remove Cluster Performance History
+Remove-VirtualDisk -FriendlyName ClusterPerformanceHistory
 
 
-# - Get AZSHCI Registration - #
-Invoke-Command -ComputerName azshci1 -ScriptBlock {
-    Get-AzureStackHCI
-}
+# Generate Cluster Performance History - Enable Storage Spaces Direct Again
+Enable-ClusterStorageSpacesDirect -Verbose
 
-# - Create Resources in Azure - #
+# Remove any storage tiers that are not applicable.
+Remove-StorageTier -FriendlyName <tier_name>
 
-# Define the Azure resource group name (Customizable)
-$ResourceGroupName = $ClusterName + "_Rg"
+#  Change Fault DOmain type of existing volumes
+#  For non-tired volumns.
+Set-VirtualDisk –FriendlyName <name> -FaultDomainAwareness StorageScaleUnit
 
-# Install the Az.Resources module to create resource groups
-if (!(Get-InstalledModule -Name Az.Resources -ErrorAction Ignore)) {
-    Install-Module -Name Az.Resources -Force
-}
+#  CHeck Progress #
+Get-VirtualDisk -FriendlyName <volume_name> | FL FaultDomainAwareness
+Get-StorageJob
 
-# Display and select location for registered cluster (and RG)
-$region = (Get-AzLocation | Where-Object Providers -Contains "Microsoft.AzureStackHCI" `
-    | Out-GridView -OutputMode Single -Title "Please select Location for Azure Stack HCI metadata").Location
 
-# Create the resource group to contain the registered Azure Stack HCI cluster
-if (-not (Get-AzResourceGroup -Name $ResourceGroupName -ErrorAction Ignore)) {
-    New-AzResourceGroup -Name $ResourceGroupName -Location $region
-}
+## IF using a tiered volume... which I dont ##
+Get-StorageTier -FriendlyName <volume_name*> | Set-StorageTier -FaultDomainAwareness StorageScaleUnit
+Get-StorageTier -FriendlyName <volume_name*> | FL FriendlyName, FaultDomainAwareness
 
-# - Register Cluster - #
-Register-AzStackHCI -SubscriptionId $subscriptionID -ComputerName $ClusterName -Region "eastus" -ResourceName $ClusterName -ResourceGroupName $ResourceGroupName
+### - Inline resilency changes - ###
+Get-StorageJob
+
+## - Single Node to Two Node - ##
+## If you want to keep two-way mirror don't do this
+# - Non Tiered
+Set-VirtualDisk -FriendlyName <name> -NumberOfDataCopies 4
+# - Tiered
+Get-StorageTier -FriendlyName <volume_name*> | Set-StorageTier -NumberOfDataCopies 4
+
+# - Move Volume
+Move-ClusterSharedVolume -Name <name> -Node <node>
+
+## - Two -Node to Multi Node - ##
+## If you want to keep two-way mirror don't do this
+# - non tiered
+Set-VirtualDisk -FriendlyName <name> -NumberOfDataCopies 3
+# - Tiered
+Get-StorageTier -FriendlyName <volume_name*> | Set-StorageTier -NumberOfDataCopies 3
+
+# - Move Volume
+Move-ClusterSharedVolume -Name <name> -Node <node>
 
 
 
-## - Validate Azure Stack HCI Deployment - ##
+
+
 
 
 
