@@ -1,0 +1,149 @@
+# =============================================================================
+# {{REPO_NAME}} — .gitignore
+# Generated from HCS platform template. Customize below the divider.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# SECRETS — most important section. Nothing sensitive ever gets committed.
+# -----------------------------------------------------------------------------
+.env
+.env.*
+*.env
+*.secret
+*.secrets
+*.key
+*.pem
+*.pfx
+*.p12
+*.cer
+*.crt
+secrets/
+secret/
+credentials/
+credentials.json
+local.settings.json
+appsettings.local.json
+appsettings.*.local.json
+**/local.settings.json
+**/.secrets/
+
+# -----------------------------------------------------------------------------
+# PowerShell
+# -----------------------------------------------------------------------------
+*.ps1xml
+profile.ps1
+local-profile.ps1
+.pshistory
+/PSScriptAnalyzerSettings.psd1
+
+# -----------------------------------------------------------------------------
+# VS Code
+# -----------------------------------------------------------------------------
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.code-workspace
+
+# -----------------------------------------------------------------------------
+# JetBrains
+# -----------------------------------------------------------------------------
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# -----------------------------------------------------------------------------
+# Node / JavaScript
+# -----------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp
+.pnp.js
+.npm
+.yarn/
+dist/
+build/
+.next/
+.nuxt/
+.cache/
+*.tsbuildinfo
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+pip-log.txt
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# -----------------------------------------------------------------------------
+# Azure / Terraform
+# -----------------------------------------------------------------------------
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+override.tf
+*_override.tf
+.terraform.lock.hcl
+*.parameters.local.json
+
+# Azure Functions
+local.settings.json
+bin/
+obj/
+
+# -----------------------------------------------------------------------------
+# MkDocs
+# -----------------------------------------------------------------------------
+site/
+
+# -----------------------------------------------------------------------------
+# OS artifacts
+# -----------------------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+.DS_Store
+.AppleDouble
+*~
+.directory
+
+# -----------------------------------------------------------------------------
+# Temporary and build artifacts
+# -----------------------------------------------------------------------------
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.log
+logs/
+*.cache
+
+# -----------------------------------------------------------------------------
+# Project-specific additions go below this line
+# -----------------------------------------------------------------------------
